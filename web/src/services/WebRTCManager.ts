@@ -38,7 +38,7 @@ export class WebRTCManager {
   public onVisionMetadata?: (visionData: any) => void
 
   // Constants for timeouts and retry logic
-  private readonly CONNECTION_TIMEOUT = 15000 // 15 seconds
+  private readonly CONNECTION_TIMEOUT = 45000 // 45 seconds; allow ICE checks on slower/local networks
   private readonly FRAME_TIMEOUT = 10000 // 10 seconds to receive first frame
   private readonly MAX_RETRY_ATTEMPTS = 3
   private readonly FRAME_CHECK_INTERVAL = 1000 // Check for frames every second
