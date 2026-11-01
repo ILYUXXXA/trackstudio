@@ -634,7 +634,23 @@ export class WebRTCManager {
 
     await pc.setLocalDescription(offer)
 
-    // Send offer via WebSocket
+    // This signaling channel does not exchange trickle ICE candidates.
+    // Wait until the browser has gathered candidates so the SDP sent to
+    // the server contains usable ICE information.
+    if (pc.iceGatheringState !== 'complete') {
+      await new Promise<void>((resolve) => {
+        const onIceGatheringStateChange = () => {
+          if (pc.iceGatheringState === 'complete') {
+            pc.removeEventListener('icegatheringstatechange', onIceGatheringStateChange)
+            resolve()
+          }
+        }
+        pc.addEventListener('icegatheringstatechange', onIceGatheringStateChange)
+        onIceGatheringStateChange()
+      })
+    }
+
+    // Send offer via WebSocket only after ICE gathering is complete.
     const offerMessage: WebRTCOffer = {
       message_type: 'offer',
       type: pc.localDescription!.type,
