@@ -67,15 +67,14 @@ class StreamConnection:
             await self.pc.setRemoteDescription(offer)
             logger.info(f"📥 Set remote description for {self.connection_id}")
 
-            # Always get a video track immediately (black frames if stream combiner not ready)
-            video_track = stream_combiner_manager.get_video_track()
-            if not video_track:
-                logger.warning("Stream combiner not ready, will start in background")
-                # Start stream combiner in background (non-blocking)
-                asyncio.create_task(stream_combiner_manager.start())
-                # Get track anyway - it will provide black frames until ready
-                video_track = stream_combiner_manager.get_video_track()
+            # Start the stream combiner before requesting its video track.
+            # get_video_track() always creates a track, so checking it first
+            # would skip the initialization branch and leave the combiner stopped.
+            if not stream_combiner_manager.is_running:
+                logger.info("Starting stream combiner before WebRTC connection...")
+                await stream_combiner_manager.start()
 
+            video_track = stream_combiner_manager.get_video_track()
             if video_track:
                 self.pc.addTrack(video_track)
                 logger.info(f"📹 Added video track to connection {self.connection_id}")
