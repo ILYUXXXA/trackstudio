@@ -351,9 +351,29 @@ async def handle_stop_stream(connection_id: str, _message: dict[str, Any]):
 
 @router.get("/stream-stats")
 async def get_stream_stats():
-    """Get current combined stream statistics"""
+    """Get stream statistics and active WebRTC negotiation state."""
     try:
         stats = stream_combiner_manager.get_stats()
+        stats["webrtcConnections"] = {
+            connection_id: {
+                "connectionState": connection.pc.connectionState,
+                "iceConnectionState": connection.pc.iceConnectionState,
+                "iceGatheringState": connection.pc.iceGatheringState,
+                "signalingState": connection.pc.signalingState,
+                "transceivers": [
+                    {
+                        "kind": transceiver.kind,
+                        "direction": transceiver.direction,
+                        "currentDirection": transceiver.currentDirection,
+                        "senderTrack": transceiver.sender.track is not None,
+                        "receiverTrack": transceiver.receiver.track is not None,
+                    }
+                    for transceiver in connection.pc.getTransceivers()
+                ],
+            }
+            for connection_id, connection in manager.webrtc_connections.items()
+            if not connection.is_closed
+        }
         return {"status": "success", "data": stats}
     except Exception as e:
         logger.error(f"Error getting stream stats: {e}")
