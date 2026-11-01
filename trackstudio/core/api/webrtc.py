@@ -354,12 +354,43 @@ async def get_stream_stats():
     """Get stream statistics and active WebRTC negotiation state."""
     try:
         stats = stream_combiner_manager.get_stats()
-        stats["webrtcConnections"] = {
-            connection_id: {
+        stats["webrtcConnections"] = {}
+        for connection_id, connection in manager.webrtc_connections.items():
+            if connection.is_closed:
+                continue
+
+            peer_stats = await connection.pc.getStats()
+            candidate_pairs = []
+            candidates_by_id = {
+                stat.id: stat
+                for stat in peer_stats.values()
+                if stat.type in {"local-candidate", "remote-candidate"}
+            }
+            for stat in peer_stats.values():
+                if stat.type != "candidate-pair":
+                    continue
+                local_candidate = candidates_by_id.get(getattr(stat, "localCandidateId", None))
+                remote_candidate = candidates_by_id.get(getattr(stat, "remoteCandidateId", None))
+                candidate_pairs.append({
+                    "state": getattr(stat, "state", None),
+                    "nominated": getattr(stat, "nominated", None),
+                    "selected": getattr(stat, "selected", None),
+                    "localCandidateType": getattr(local_candidate, "candidateType", None),
+                    "localProtocol": getattr(local_candidate, "protocol", None),
+                    "localAddress": getattr(local_candidate, "ip", None) or getattr(local_candidate, "address", None),
+                    "localPort": getattr(local_candidate, "port", None),
+                    "remoteCandidateType": getattr(remote_candidate, "candidateType", None),
+                    "remoteProtocol": getattr(remote_candidate, "protocol", None),
+                    "remoteAddress": getattr(remote_candidate, "ip", None) or getattr(remote_candidate, "address", None),
+                    "remotePort": getattr(remote_candidate, "port", None),
+                })
+
+            stats["webrtcConnections"][connection_id] = {
                 "connectionState": connection.pc.connectionState,
                 "iceConnectionState": connection.pc.iceConnectionState,
                 "iceGatheringState": connection.pc.iceGatheringState,
                 "signalingState": connection.pc.signalingState,
+                "candidatePairs": candidate_pairs,
                 "transceivers": [
                     {
                         "kind": transceiver.kind,
@@ -371,9 +402,6 @@ async def get_stream_stats():
                     for transceiver in connection.pc.getTransceivers()
                 ],
             }
-            for connection_id, connection in manager.webrtc_connections.items()
-            if not connection.is_closed
-        }
         return {"status": "success", "data": stats}
     except Exception as e:
         logger.error(f"Error getting stream stats: {e}")
