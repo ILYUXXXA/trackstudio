@@ -625,11 +625,12 @@ export class WebRTCManager {
   private async createAndSendOffer(pc: RTCPeerConnection) {
     this.updateCombinedStreamState('negotiating')
 
+    // Explicitly negotiate a video m-line for the server's outgoing track.
+    // The legacy offerToReceiveVideo option is not reliable across browsers.
+    pc.addTransceiver('video', { direction: 'recvonly' })
+
     // Create offer
-    const offer = await pc.createOffer({
-      offerToReceiveAudio: false,
-      offerToReceiveVideo: true
-    })
+    const offer = await pc.createOffer()
 
     await pc.setLocalDescription(offer)
 
