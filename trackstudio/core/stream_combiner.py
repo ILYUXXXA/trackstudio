@@ -78,7 +78,10 @@ class StreamCombinerTrack(VideoStreamTrack):
 
         # FPS calculation
         self.fps = 30  # target FPS
+        # Lifetime count exposed by the stats API; do not reset this every second.
         self.frame_count = 0
+        # Separate rolling counter used only for FPS calculation.
+        self._fps_frame_count = 0
         self.last_fps_time = time.time()
         self.measured_fps = 0.0
 
@@ -445,12 +448,14 @@ class StreamCombinerTrack(VideoStreamTrack):
             rgb_frame = cv2.cvtColor(combined_frame, cv2.COLOR_BGR2RGB)
             rgb_frame = np.ascontiguousarray(rgb_frame, dtype=np.uint8)
 
-            # Update FPS counter
+            # Update lifetime frame count and rolling FPS counter.
             self.frame_count += 1
+            self._fps_frame_count += 1
             now = time.time()
-            if now - self.last_fps_time >= 1.0:
-                self.measured_fps = self.frame_count / (now - self.last_fps_time)
-                self.frame_count = 0
+            elapsed = now - self.last_fps_time
+            if elapsed >= 1.0:
+                self.measured_fps = self._fps_frame_count / elapsed
+                self._fps_frame_count = 0
                 self.last_fps_time = now
 
             # Create VideoFrame for aiortc
