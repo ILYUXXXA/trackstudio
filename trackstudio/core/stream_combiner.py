@@ -78,9 +78,19 @@ class StreamCombinerTrack(VideoStreamTrack):
 
         # FPS calculation
         self.fps = 30  # target FPS
+        # Lifetime count exposed by the stats API; do not reset this every second.
         self.frame_count = 0
+        # Separate rolling counter used only for FPS calculation.
+        self._fps_frame_count = 0
         self.last_fps_time = time.time()
         self.measured_fps = 0.0
+
+        # Diagnostics: distinguish a WebRTC track that is not being pulled
+        # from a track that is running but cannot read its RTSP sources.
+        self.recv_calls = 0
+        self.capture_open_count = 0
+        self.read_success_count = 0
+        self.read_failure_count = 0
 
         # Vision processor result
         self.latest_vision_result: VisionResult | None = None
@@ -223,6 +233,7 @@ class StreamCombinerTrack(VideoStreamTrack):
 
     async def recv(self):
         """Receive frames from individual streams, apply delays via frame skipping, and combine manually"""
+        self.recv_calls += 1
         current_time = time.time()
 
         # Calculate relative timestamp for both video and vision (always needed)
@@ -271,6 +282,7 @@ class StreamCombinerTrack(VideoStreamTrack):
             for stream_id, cap in self.stream_caps.items():
                 ret, frame = cap.read()
                 if ret and frame is not None:
+                    self.read_success_count += 1
                     # Resize frame to 720x480 if needed
                     if frame.shape[:2] != (480, 720):
                         frame = cv2.resize(frame, (720, 480))
@@ -286,6 +298,7 @@ class StreamCombinerTrack(VideoStreamTrack):
                     # Track successful frame reads
                     self.frame_read_stats[stream_id]["success"] += 1
                 else:
+                    self.read_failure_count += 1
                     # Track failed frame reads
                     self.frame_read_stats[stream_id]["failures"] += 1
                     self.frame_read_stats[stream_id]["last_failure_time"] = current_time
@@ -445,12 +458,14 @@ class StreamCombinerTrack(VideoStreamTrack):
             rgb_frame = cv2.cvtColor(combined_frame, cv2.COLOR_BGR2RGB)
             rgb_frame = np.ascontiguousarray(rgb_frame, dtype=np.uint8)
 
-            # Update FPS counter
+            # Update lifetime frame count and rolling FPS counter.
             self.frame_count += 1
+            self._fps_frame_count += 1
             now = time.time()
-            if now - self.last_fps_time >= 1.0:
-                self.measured_fps = self.frame_count / (now - self.last_fps_time)
-                self.frame_count = 0
+            elapsed = now - self.last_fps_time
+            if elapsed >= 1.0:
+                self.measured_fps = self._fps_frame_count / elapsed
+                self._fps_frame_count = 0
                 self.last_fps_time = now
 
             # Create VideoFrame for aiortc
@@ -493,6 +508,7 @@ class StreamCombinerTrack(VideoStreamTrack):
 
             # Count how many actually opened
             open_count = sum(1 for cap in self.stream_caps.values() if cap.isOpened())
+            self.capture_open_count = open_count
             total_streams = len(self.stream_caps)
 
             if open_count > 0:
@@ -758,6 +774,11 @@ class StreamCombinerManager:
             return {
                 "fps": round(self.track.measured_fps, 1),
                 "frameCount": self.track.frame_count,
+                "recvCalls": self.track.recv_calls,
+                "captureOpenCount": self.track.capture_open_count,
+                "configuredStreams": len(self.track.enabled_streams),
+                "readSuccessCount": self.track.read_success_count,
+                "readFailureCount": self.track.read_failure_count,
                 "isRunning": True,
                 "timestamp": time.time(),
             }

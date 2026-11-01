@@ -67,15 +67,14 @@ class StreamConnection:
             await self.pc.setRemoteDescription(offer)
             logger.info(f"📥 Set remote description for {self.connection_id}")
 
-            # Always get a video track immediately (black frames if stream combiner not ready)
-            video_track = stream_combiner_manager.get_video_track()
-            if not video_track:
-                logger.warning("Stream combiner not ready, will start in background")
-                # Start stream combiner in background (non-blocking)
-                asyncio.create_task(stream_combiner_manager.start())
-                # Get track anyway - it will provide black frames until ready
-                video_track = stream_combiner_manager.get_video_track()
+            # Start the stream combiner before requesting its video track.
+            # get_video_track() always creates a track, so checking it first
+            # would skip the initialization branch and leave the combiner stopped.
+            if not stream_combiner_manager.is_running:
+                logger.info("Starting stream combiner before WebRTC connection...")
+                await stream_combiner_manager.start()
 
+            video_track = stream_combiner_manager.get_video_track()
             if video_track:
                 self.pc.addTrack(video_track)
                 logger.info(f"📹 Added video track to connection {self.connection_id}")
@@ -352,9 +351,57 @@ async def handle_stop_stream(connection_id: str, _message: dict[str, Any]):
 
 @router.get("/stream-stats")
 async def get_stream_stats():
-    """Get current combined stream statistics"""
+    """Get stream statistics and active WebRTC negotiation state."""
     try:
         stats = stream_combiner_manager.get_stats()
+        stats["webrtcConnections"] = {}
+        for connection_id, connection in manager.webrtc_connections.items():
+            if connection.is_closed:
+                continue
+
+            peer_stats = await connection.pc.getStats()
+            candidate_pairs = []
+            candidates_by_id = {
+                stat.id: stat
+                for stat in peer_stats.values()
+                if stat.type in {"local-candidate", "remote-candidate"}
+            }
+            for stat in peer_stats.values():
+                if stat.type != "candidate-pair":
+                    continue
+                local_candidate = candidates_by_id.get(getattr(stat, "localCandidateId", None))
+                remote_candidate = candidates_by_id.get(getattr(stat, "remoteCandidateId", None))
+                candidate_pairs.append({
+                    "state": getattr(stat, "state", None),
+                    "nominated": getattr(stat, "nominated", None),
+                    "selected": getattr(stat, "selected", None),
+                    "localCandidateType": getattr(local_candidate, "candidateType", None),
+                    "localProtocol": getattr(local_candidate, "protocol", None),
+                    "localAddress": getattr(local_candidate, "ip", None) or getattr(local_candidate, "address", None),
+                    "localPort": getattr(local_candidate, "port", None),
+                    "remoteCandidateType": getattr(remote_candidate, "candidateType", None),
+                    "remoteProtocol": getattr(remote_candidate, "protocol", None),
+                    "remoteAddress": getattr(remote_candidate, "ip", None) or getattr(remote_candidate, "address", None),
+                    "remotePort": getattr(remote_candidate, "port", None),
+                })
+
+            stats["webrtcConnections"][connection_id] = {
+                "connectionState": connection.pc.connectionState,
+                "iceConnectionState": connection.pc.iceConnectionState,
+                "iceGatheringState": connection.pc.iceGatheringState,
+                "signalingState": connection.pc.signalingState,
+                "candidatePairs": candidate_pairs,
+                "transceivers": [
+                    {
+                        "kind": transceiver.kind,
+                        "direction": transceiver.direction,
+                        "currentDirection": transceiver.currentDirection,
+                        "senderTrack": transceiver.sender.track is not None,
+                        "receiverTrack": transceiver.receiver.track is not None,
+                    }
+                    for transceiver in connection.pc.getTransceivers()
+                ],
+            }
         return {"status": "success", "data": stats}
     except Exception as e:
         logger.error(f"Error getting stream stats: {e}")

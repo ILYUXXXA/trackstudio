@@ -38,7 +38,7 @@ export class WebRTCManager {
   public onVisionMetadata?: (visionData: any) => void
 
   // Constants for timeouts and retry logic
-  private readonly CONNECTION_TIMEOUT = 15000 // 15 seconds
+  private readonly CONNECTION_TIMEOUT = 45000 // 45 seconds; allow ICE checks on slower/local networks
   private readonly FRAME_TIMEOUT = 10000 // 10 seconds to receive first frame
   private readonly MAX_RETRY_ATTEMPTS = 3
   private readonly FRAME_CHECK_INTERVAL = 1000 // Check for frames every second
@@ -625,15 +625,32 @@ export class WebRTCManager {
   private async createAndSendOffer(pc: RTCPeerConnection) {
     this.updateCombinedStreamState('negotiating')
 
+    // Explicitly negotiate a video m-line for the server's outgoing track.
+    // The legacy offerToReceiveVideo option is not reliable across browsers.
+    pc.addTransceiver('video', { direction: 'recvonly' })
+
     // Create offer
-    const offer = await pc.createOffer({
-      offerToReceiveAudio: false,
-      offerToReceiveVideo: true
-    })
+    const offer = await pc.createOffer()
 
     await pc.setLocalDescription(offer)
 
-    // Send offer via WebSocket
+    // This signaling channel does not exchange trickle ICE candidates.
+    // Wait until the browser has gathered candidates so the SDP sent to
+    // the server contains usable ICE information.
+    if (pc.iceGatheringState !== 'complete') {
+      await new Promise<void>((resolve) => {
+        const onIceGatheringStateChange = () => {
+          if (pc.iceGatheringState === 'complete') {
+            pc.removeEventListener('icegatheringstatechange', onIceGatheringStateChange)
+            resolve()
+          }
+        }
+        pc.addEventListener('icegatheringstatechange', onIceGatheringStateChange)
+        onIceGatheringStateChange()
+      })
+    }
+
+    // Send offer via WebSocket only after ICE gathering is complete.
     const offerMessage: WebRTCOffer = {
       message_type: 'offer',
       type: pc.localDescription!.type,
